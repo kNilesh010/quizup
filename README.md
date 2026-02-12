@@ -1,77 +1,82 @@
-# QuizUp iOS Clone (SwiftUI + PostgreSQL backend design)
+# SportsHub: Realtime Sports Scores Platform (Next.js + Node.js + Redis + WebSockets)
 
-This repository contains a production-style blueprint for an iOS trivia platform inspired by QuizUp. It includes:
+This repository now includes a production-style architecture for a sports website that aggregates multiple APIs, streams live updates, and supports authenticated users at scale.
 
-- SwiftUI app structure for authentication, topic browsing, game rounds, profile, and leaderboard.
-- Domain/service architecture for clean separation (Auth, Question generation, Progress, Leaderboard).
-- Database schema and API design for a scalable backend.
-- Non-repeating random question logic per user/topic/level.
+## Product concept (layout mapping)
 
-## Feature Checklist
+| Reference UX Pattern | SportsHub Equivalent |
+|---|---|
+| Thumbnail grid | Match cards |
+| Duration badge | Match time / live status |
+| Category tags | League / sport tags |
+| Trending row | Live / hot matches |
+| Search bar | Team / player search |
+| Sidebar filters | Sport / country filters |
 
-### 1) Authentication
-- Email + password sign up/sign in.
-- Sign in with Apple flow abstraction.
-- User session token model.
+## Stack
 
-### 2) Trivia gameplay
-- Topic picker (Science, Movies seeds).
-- Four levels: Beginner, Intermediate, Advanced, Expert.
-- 10-question rounds with score tracking.
-- Explanation support on each question model.
+### Backend
+- Node.js + Express API
+- PostgreSQL (core system of record)
+- Redis (live-score cache and fast fan-out read path)
+- Socket.IO for real-time updates
+- JWT authentication
+- Rate-limiting + fallback provider strategy
 
-### 3) Question levels and progression
-- Unlock logic based on best historical score:
-  - Beginner score >= 50 unlocks Intermediate.
-  - Intermediate score >= 60 unlocks Advanced.
-  - Advanced score >= 70 unlocks Expert.
+### Frontend
+- Next.js App Router + React
+- Server Components for SEO and initial render
+- Client component hydration for live updates via WebSocket
 
-### 4) Random question generation without repetition
-- `QuestionService.nextQuestion(...)` loads all available questions for `(topic, level)`.
-- Fetches `UserQuestionHistory` for the same `(user, topic, level)`.
-- Filters out already answered IDs.
-- Returns a random unseen question.
-- On answer submit, question ID is stored in history so it cannot reappear.
+---
 
-### 5) Leaderboards
-- Global leaderboard service.
-- Topic leaderboard service.
-- Sorted by rating.
+## High-level architecture
 
-### 6) Backend & database
-- PostgreSQL schema in `Backend/schema/schema.sql`.
-- Core tables: users, topics, questions, user_question_history, rounds.
-- API endpoint reference in `Backend/api/endpoints.md`.
+1. **Client request** hits Next.js server component page.
+2. Next.js fetches initial live matches from Node API for SEO-friendly HTML.
+3. Browser hydrates a client component that opens WebSocket (`subscribe:live`).
+4. Backend score service resolves from:
+   - Redis cache (fast path)
+   - Primary API provider
+   - Secondary API provider fallback
+5. Node pushes updates to subscribed sockets every polling interval.
+6. Persisted entities (users, leagues, teams, matches, events) stored in PostgreSQL.
 
-## Suggested Production Stack
-- iOS App: SwiftUI + async/await + Combine.
-- API: Vapor (Swift) or Node/NestJS.
-- DB: PostgreSQL.
-- Auth: JWT + Sign in with Apple.
-- Caching/queues: Redis.
-- Realtime matches: WebSockets.
+### Concurrency strategy (thousands of users)
+- Stateless Node API pods behind L4/L7 load balancer.
+- Redis for hot data + pub/sub fan-out between websocket nodes.
+- Read-through caching (`15s TTL`) to reduce provider calls.
+- Tight rate limits per IP to protect auth and provider quotas.
+- DB indexes on live-query and event timelines.
+- Horizontal scaling plan:
+  - API pods: auto-scale on CPU + request latency.
+  - Socket pods: sticky sessions + Redis adapter.
+  - Managed PostgreSQL with read replicas.
 
-## Non-Repeating Query Pattern (Backend)
+## Repo structure
 
-```sql
-SELECT q.*
-FROM questions q
-LEFT JOIN user_question_history h
-  ON h.question_id = q.id
- AND h.user_id = $1
-WHERE q.topic_id = $2
-  AND q.level = $3
-  AND q.is_active = TRUE
-  AND h.question_id IS NULL
-ORDER BY RANDOM()
-LIMIT 1;
+- `Backend/src` – Node API, auth, live score service, sockets, middleware.
+- `Backend/schema/schema.sql` – PostgreSQL schema for auth + sports data.
+- `Backend/api/endpoints.md` – Endpoint and real-time contract.
+- `Frontend/src/app` – Next.js server-rendered shell.
+- `Frontend/src/components/LiveTicker.jsx` – client-side live hydration.
+
+## Quick start
+
+### Backend
+```bash
+cd Backend
+npm install
+npm run dev
 ```
 
-If this query returns 0 rows, the user has exhausted the pool for that topic+level.
+### Frontend
+```bash
+cd Frontend
+npm install
+npm run dev
+```
 
-## Next Steps
-1. Create an Xcode project and add files from `QuizUpApp`.
-2. Wire `GameRepository` to real API calls.
-3. Replace in-memory data with backend responses.
-4. Add push notifications, friend system, and chat.
-5. Add anti-cheat and telemetry.
+Set environment variables as needed:
+- Backend: `PORT`, `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `SPORTS_API_PRIMARY`, `SPORTS_API_SECONDARY`, `SPORTS_API_KEY`
+- Frontend: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`, `DEMO_JWT`
