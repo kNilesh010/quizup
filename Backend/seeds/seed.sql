@@ -1,5 +1,12 @@
-INSERT INTO topics (id, name, description) VALUES
-('8b4f604d-9224-4f6b-af8f-0f95f16a02d3', 'Science', 'General science and innovation'),
-('ca0e61b5-72f3-40e7-bf20-5d6c67e6a9be', 'Movies', 'Classics and modern cinema');
+INSERT INTO sports (key, name)
+VALUES
+('football', 'Football'),
+('basketball', 'Basketball'),
+('tennis', 'Tennis');
 
--- Production seed generator should insert hundreds/thousands of questions per topic and level.
+INSERT INTO leagues (sport_id, external_league_id, name, country)
+SELECT s.id, '39', 'Premier League', 'England'
+FROM sports s
+WHERE s.key = 'football';
+
+-- Add production-grade data through provider sync jobs.
