@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CrashLab - Quant Crash Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Inter, Arial, sans-serif; margin: 0; background: #020617; color: #e2e8f0; }
+    header { padding: 18px 24px; border-bottom: 1px solid #1e293b; background: #0f172a; }
+    .container { padding: 20px; display: grid; gap: 16px; }
+    .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 12px; }
+    .controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(170px, 1fr)); gap: 10px; }
+    .label { color: #94a3b8; font-size: 0.8rem; }
+    .value { font-size: 1.1rem; margin-top: 4px; font-weight: 700; }
+    .high { color: #f87171; } .normal { color: #4ade80; }
+    table { width: 100%; border-collapse: collapse; } th, td { padding: 8px; border-bottom: 1px solid #1e293b; }
+    .note { color: #94a3b8; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+<header><h2>CrashLab | Historical crash analytics + forward crash probability</h2></header>
+<div class="container">
+  <div class="card controls">
+    <label>Crash drawdown threshold (%): <input id="drawdown" type="range" min="10" max="45" value="20"/> <span id="ddv">20</span></label>
+    <label>Alert threshold (%): <input id="risk" type="range" min="20" max="90" value="45"/> <span id="rv">45</span></label>
+    <button id="refresh">Refresh</button>
+    <span class="note">Auto refresh every 45s. Data: Yahoo Finance.</span>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">As Of</div><div id="asof" class="value">-</div></div>
+    <div class="card"><div class="label">S&P 500</div><div id="px" class="value">-</div></div>
+    <div class="card"><div class="label">Current Drawdown</div><div id="dd" class="value">-</div></div>
+    <div class="card"><div class="label">20d Volatility</div><div id="vol" class="value">-</div></div>
+    <div class="card"><div class="label">20d Return</div><div id="ret" class="value">-</div></div>
+    <div class="card"><div class="label">Crash Probability</div><div id="prob" class="value">-</div></div>
+    <div class="card"><div class="label">Regime</div><div id="regime" class="value">-</div></div>
+    <div class="card"><div class="label">Crash Count</div><div id="count" class="value">-</div></div>
+  </div>
+
+  <div class="card"><canvas id="chart" height="100"></canvas></div>
+  <div class="card"><h3>Detected crash windows</h3><table><thead><tr><th>Start</th><th>End</th><th>Min drawdown (%)</th></tr></thead><tbody id="events"></tbody></table></div>
+</div>
+
+<script>
+let chart;
+
+const mean = arr => arr.reduce((a,b)=>a+b,0)/arr.length;
+const std = arr => { const m = mean(arr); return Math.sqrt(mean(arr.map(x => (x-m)**2))); };
+
+function detectCrashes(drawdowns, dates, threshold) {
+  const ev=[]; let open=false, start='', minDd=0;
+  for(let i=0;i<drawdowns.length;i++){
+    const dd=drawdowns[i];
+    if(dd<=-threshold && !open){ open=true; start=dates[i]; minDd=dd; }
+    else if(dd<=-threshold && open){ minDd=Math.min(minDd,dd); }
+    else if(dd>-threshold && open){ ev.push({start, end:dates[i], min:(minDd*100).toFixed(2)}); open=false; }
+  }
+  if(open) ev.push({start, end:'ongoing', min:(minDd*100).toFixed(2)});
+  return ev;
+}
+
+function crashProbability(vol20, drawdown, ma50, ma200, vix) {
+  const zVol = Math.min(Math.max((vol20 - 0.12)/0.25, 0), 2);
+  const zDd = Math.min(Math.max(Math.abs(Math.min(drawdown, 0))/0.35, 0), 2);
+  const zMo = ma50 < ma200 ? 1 : 0;
+  const zVix = Number.isFinite(vix) ? Math.min(Math.max((vix - 18)/22, 0), 2) : 0;
+  const linear = 0.45*zVol + 0.30*zDd + 0.15*zMo + 0.10*zVix;
+  return 1 / (1 + Math.exp(-3.2*(linear - 0.7)));
+}
+
+async function fetchYahoo(symbol, range='max', interval='1d') {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
+  const res = await fetch(url);
+  const json = await res.json();
+  const result = json.chart.result[0];
+  return {
+    dates: result.timestamp.map(t => new Date(t*1000).toISOString().slice(0,10)),
+    close: result.indicators.quote[0].close,
+  };
+}
+
+async function refresh() {
+  const ddThreshold = Number(document.getElementById('drawdown').value) / 100;
+  const riskThreshold = Number(document.getElementById('risk').value) / 100;
+
+  const [spx, vix] = await Promise.all([fetchYahoo('^GSPC'), fetchYahoo('^VIX', '2y')]);
+  const prices = spx.close.map(Number).filter(Number.isFinite);
+  const dates = spx.dates.slice(spx.dates.length - prices.length);
+  const peaks=[]; const dds=[];
+  let runningPeak = -Infinity;
+  for (const p of prices) { runningPeak=Math.max(runningPeak,p); peaks.push(runningPeak); dds.push(p/runningPeak - 1); }
+
+  const ret1 = prices.map((p,i)=> i? (p/prices[i-1]-1):null).filter(x=>x!==null);
+  const vol20 = std(ret1.slice(-20)) * Math.sqrt(252);
+  const ret20 = prices[prices.length-1]/prices[prices.length-21]-1;
+  const ma50 = mean(prices.slice(-50));
+  const ma200 = mean(prices.slice(-200));
+  const vixNow = Number(vix.close.filter(Number.isFinite).slice(-1)[0]);
+  const prob = crashProbability(vol20, dds[dds.length-1], ma50, ma200, vixNow);
+  const events = detectCrashes(dds, dates, ddThreshold);
+
+  document.getElementById('asof').textContent = dates[dates.length-1];
+  document.getElementById('px').textContent = prices[prices.length-1].toFixed(2);
+  document.getElementById('dd').textContent = (dds[dds.length-1]*100).toFixed(2) + '%';
+  document.getElementById('vol').textContent = (vol20*100).toFixed(2) + '%';
+  document.getElementById('ret').textContent = (ret20*100).toFixed(2) + '%';
+  document.getElementById('prob').textContent = (prob*100).toFixed(2) + '%';
+  document.getElementById('regime').textContent = prob >= riskThreshold ? 'High Risk' : 'Normal';
+  document.getElementById('regime').className = 'value ' + (prob >= riskThreshold ? 'high' : 'normal');
+  document.getElementById('count').textContent = events.length;
+
+  const tbody = document.getElementById('events'); tbody.innerHTML = '';
+  events.slice(-12).reverse().forEach(e => tbody.insertAdjacentHTML('beforeend', `<tr><td>${e.start}</td><td>${e.end}</td><td>${e.min}</td></tr>`));
+
+  const ctx = document.getElementById('chart');
+  if(chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type:'line',
+    data:{ labels: dates.slice(-500), datasets:[{ label:'Drawdown %', data: dds.slice(-500).map(x=>x*100), borderColor:'#f87171', pointRadius:0 }] },
+    options:{ plugins:{legend:{labels:{color:'#e2e8f0'}}}, scales:{x:{ticks:{color:'#94a3b8'}},y:{ticks:{color:'#94a3b8'}}} }
+  });
+}
+
+document.getElementById('drawdown').addEventListener('input', e => document.getElementById('ddv').textContent = e.target.value);
+document.getElementById('risk').addEventListener('input', e => document.getElementById('rv').textContent = e.target.value);
+document.getElementById('refresh').addEventListener('click', refresh);
+refresh();
+setInterval(refresh, 45000);
+</script>
+</body>
+</html>

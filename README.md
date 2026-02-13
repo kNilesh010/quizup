@@ -75,3 +75,24 @@ If this query returns 0 rows, the user has exhausted the pool for that topic+lev
 3. Replace in-memory data with backend responses.
 4. Add push notifications, friend system, and chat.
 5. Add anti-cheat and telemetry.
+
+## CrashLab dashboard (quant risk monitoring)
+
+A standalone quant dashboard is included at `dashboard/index.html`. It pulls live market data, detects historical crash regimes, and estimates a forward crash probability signal using multi-factor stress features.
+
+### Features
+- Real-time Yahoo Finance feed (S&P 500 + VIX), auto-refreshing every 45s.
+- Historical crash regime detection with configurable drawdown threshold.
+- Forward crash probability signal from:
+  - realized volatility
+  - drawdown depth
+  - trend regime (50d vs 200d average)
+  - volatility stress proxy (VIX)
+- Parameterized alert thresholds and interactive charting.
+
+### Run locally
+```bash
+python -m http.server 8000
+```
+
+Open: `http://localhost:8000/dashboard/index.html`
